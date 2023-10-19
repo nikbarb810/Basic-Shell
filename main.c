@@ -1,10 +1,99 @@
 #include "main.h"
 
+struct redirect_info *tokenize_redirection(char *command) {
+    char *dup_command = strdup(command);
 
+    char *file_name_in = NULL;
+    char *file_name_out = NULL;
+    int flag_is_append = 0;
+
+    //see if string has <
+    char *e_in = strchr(dup_command, '<');
+
+
+    if(e_in) {
+        //find index of it
+        int index = (int) (e_in - dup_command) + 1;
+
+        //get the file name
+        file_name_in = (char *) malloc(100 * sizeof(char));
+        int i = 0;
+        int started_file_flag = 0;
+
+        while(dup_command[index] != '\0') {
+            //if I still havent hit filename, continue parsing
+            if(dup_command[index] == ' ' && !started_file_flag) {
+                index++;
+                continue;
+            } else if(dup_command[index] == ' ' && started_file_flag) {
+                break;
+            } else {
+                started_file_flag = 1;
+                file_name_in[i++] = dup_command[index++];
+            }
+        }
+    }
+
+    //see if string has >
+    char *e_out = strchr(dup_command, '>');
+
+
+    if(e_out) {
+        //find index of it
+        int index = (int) (e_out - dup_command) + 1;
+
+        //check to see if next char is also >
+        //if so case is >> and we need to skip it
+        //and raise flag to know we append not override
+        if(dup_command[index] == '>') {
+            flag_is_append = 1;
+            index++;
+        }
+
+        //get the file name
+        file_name_out = (char *) malloc(100 * sizeof(char));
+        int i = 0;
+        int started_file_flag = 0;
+
+        while(dup_command[index] != '\0') {
+            //if I still havent hit filename, continue parsing
+            if(dup_command[index] == ' ' && !started_file_flag) {
+                index++;
+                continue;
+            } else if(dup_command[index] == ' ' && started_file_flag) {
+                break;
+            } else {
+                started_file_flag = 1;
+                file_name_out[i++] = dup_command[index++];
+            }
+        }
+
+
+    }
+
+    struct redirect_info *redirects;
+
+    if(!file_name_in && !file_name_out) {
+        redirects = NULL;
+    } else {
+
+        //cut off the file name from the command
+        strtok(command, "<>");
+
+        redirects = (struct redirect_info *) malloc(sizeof(struct redirect_info));
+        redirects->file_in = file_name_in;
+        redirects->file_out = file_name_out;
+        redirects->append = flag_is_append;
+    }
+
+    return redirects;
+}
 
 
 //function to create new single command
 struct single_command* create_single_command(char *command) {
+
+    struct redirect_info *redirect = tokenize_redirection(command);
 
     char *dup_command = strdup(command);
 
@@ -14,7 +103,7 @@ struct single_command* create_single_command(char *command) {
     //tokenize command based on space
     char *token = strtok(dup_command, " ");
 
-    //copy using strcpy
+    //copy using strdup
     char *command_name =  strdup(token);
 
     //initalize str array to store args
@@ -23,7 +112,7 @@ struct single_command* create_single_command(char *command) {
 
     int i = 0;
     while(token) {
-        //copy using strcpy
+        //copy using strdup
         command_args[i] = strdup(token);
 
         i++;
@@ -40,6 +129,7 @@ struct single_command* create_single_command(char *command) {
     new_command->name = command_name;
     new_command->args = command_args;
     new_command->num_args = num_args;
+    new_command->redirects = redirect;
     new_command->next = NULL;
 
 
@@ -115,7 +205,6 @@ void free_single_command(struct single_command* command) {
 //        free_single_command(command->next);
 //    }
 
-    free(command);
 }
 
 
@@ -135,7 +224,6 @@ void init_comm_seqs_arr(struct command_sequence *arr, int sz) {
 }
 
 
-
 void free_command_sequence_arr(struct command_sequence *arr, int sz) {
     int i;
     //loop through each index of the array
@@ -144,6 +232,7 @@ void free_command_sequence_arr(struct command_sequence *arr, int sz) {
         if(arr[i].head != NULL) {
             free_single_command(arr[i].head);
             arr[i].head = NULL;
+            free(arr[i].head);
             arr[i].num_commands = 0;
             arr[i].piped = 0;
         }
@@ -167,7 +256,6 @@ int read_commands(struct command_sequence *command_arr) {
             break;
         }
     }
-
 
     //duplicate input
     char *input_dup = strdup(input);
@@ -212,9 +300,132 @@ int read_commands(struct command_sequence *command_arr) {
 }
 
 
+void call_exec(struct single_command *command) {
+
+    int old_stdin,old_stdout;
+    int fdin,fdout;
+
+
+    //look at redirects
+    //if file_in, open file, save old stdin, dup2 file to stdin
+    if(command->redirects && command->redirects->file_in) {
+        old_stdin = dup(0);
+        fdin = open(command->redirects->file_in, O_RDONLY);
+        dup2(fdin, 0);
+        close(fdin);
+    }
+    //if file_out, open file, save old stdout, dup2 file to stdout
+    if(command->redirects && command->redirects->file_out) {
+        old_stdout = dup(1);
+
+        if(command->redirects->append) {
+            fdout = open(command->redirects->file_out, O_WRONLY | O_APPEND | O_CREAT, 0644);
+        } else {
+            fdout = open(command->redirects->file_out, O_WRONLY | O_CREAT, 0644);
+        }
+
+        dup2(fdout, 1);
+        close(fdout);
+    }
+    //fork, execvp, wait
+    pid_t pid = fork();
+
+    if(pid == 0) {
+        //child
+        execvp(command->name, command->args);
+    } else {
+        //parent
+        wait(NULL);
+    }
+
+    //restore stdin and stdout
+    if(command->redirects && command->redirects->file_in) {dup2(old_stdin, 0);}
+    if(command->redirects && command->redirects->file_out) {dup2(old_stdout, 1);}
+
+}
+
 void exec_command(struct command_sequence command_seq) {
 
     if(command_seq.piped) {
+
+        struct single_command *command = command_seq.head;
+
+        int i,j = 0;
+        int num_commands = command_seq.num_commands;
+        int fdin, fdout;
+
+        pid_t pid;
+        int pipefds[2*num_commands];
+
+        for(i = 0; i < num_commands; i++) {
+            if(pipe(pipefds + i*2) < 0) {
+                perror("error in pipe creation, exec_piped_command");
+                exit(1);
+            }
+        }
+
+        while(command) {
+            pid = fork();
+            if(pid < 0) {
+                perror("error in fork at exec_piped_command");
+                exit(1);
+            }
+            if(pid == 0) {
+
+                //not first command
+                if(j != 0) {
+                    if(dup2(pipefds[(j-1) * 2], 0) < 0) {
+                        perror("error in dup2 at exec_piped_command");
+                        exit(1);
+                    }
+                } else{
+                    //first command
+                    if(command->redirects && command->redirects->file_in) {
+                        fdin = open(command->redirects->file_in, O_RDONLY);
+                        dup2(fdin, 0);
+                        close(fdin);
+                    }
+                }
+
+                //not last command
+                if(j != num_commands - 1) {
+                    if(dup2(pipefds[j * 2 + 1], 1) < 0) {
+                        perror("error in dup2 at exec_piped_command");
+                        exit(1);
+                    }
+                } else {
+                    //last command
+                    if(command->redirects && command->redirects->file_out) {
+                        if(command->redirects->append) {
+                            fdout = open(command->redirects->file_out, O_WRONLY | O_APPEND | O_CREAT, 0644);
+                        } else {
+                            fdout = open(command->redirects->file_out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                        }
+                        dup2(fdout, 1);
+                        close(fdout);
+                    }
+                }
+
+                for(i = 0; i < 2*num_commands; i++) {
+                    close(pipefds[i]);
+                }
+
+                execvp(command->name, command->args);
+            }
+
+            command = command->next;
+            j++;
+
+        }
+        for(i = 0; i < 2 * num_commands; i++) {
+            close(pipefds[i]);
+        }
+
+        for(i = 0; i < num_commands; i++) {
+            wait(NULL);
+        }
+
+
 
     } else {
         //non-piped command
@@ -227,20 +438,12 @@ void exec_command(struct command_sequence command_seq) {
         } else if(strcmp(command_seq.head->name, "quit") == 0) {
             exit(0);
         } else {
-            //error handling
-            pid_t pid = fork();
-
-            if(pid == 0) {
-                //child
-                execvp(command_seq.head->name, command_seq.head->args);
-            } else {
-                //parent
-                wait(NULL);
-            }
+            call_exec(command_seq.head);
         }
     }
 
 }
+
 
 //display promt
 void type_prompt() {
@@ -270,6 +473,7 @@ int main() {
             exec_command(commands_arr[i]);
         }
 
+        //free commands
         free_command_sequence_arr(commands_arr, sz);
     }
 
