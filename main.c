@@ -219,8 +219,6 @@ void init_comm_seqs_arr(struct command_sequence *arr, int sz) {
         arr[i].piped = 0;
         arr[i].head = NULL;
     }
-
-
 }
 
 
@@ -409,7 +407,7 @@ void exec_command(struct command_sequence command_seq) {
                 for(i = 0; i < 2*num_commands; i++) {
                     close(pipefds[i]);
                 }
-
+                
                 execvp(command->name, command->args);
             }
 
@@ -447,7 +445,7 @@ void exec_command(struct command_sequence command_seq) {
 
 //display promt
 void type_prompt() {
-    printf("4690-hy-345sh@%s:%s$ ", getenv("USER"), getcwd(NULL, 1024));
+    printf("4690-hy345sh@%s:%s$ ", getenv("USER"), getcwd(NULL, 1024));
 }
 
 int main() {

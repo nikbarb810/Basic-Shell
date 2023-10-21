@@ -29,6 +29,7 @@ struct command_sequence {
     int piped;
 };
 
+//struct for the redirection info
 struct redirect_info {
     char *file_in;
     char *file_out;
